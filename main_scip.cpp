@@ -16,9 +16,54 @@
 #include <QGraphicsRectItem>
 #include <QBrush>
 #include <QColor>
+#include <QWidget>
+#include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QScrollBar>
+#include <QPainter>
+#include <QScrollArea>
+#include <QFrame>
 
 namespace fs = std::filesystem;
 
+// Виджет для таймлайна, который всегда виден внизу
+class TimelineWidget : public QWidget {
+public:
+    TimelineWidget(double maxTime, double scale, int margin, int totalWidth, QWidget* parent = nullptr)
+        : QWidget(parent), maxTime(maxTime), scale(scale), margin(margin), totalWidth(totalWidth) {
+        setFixedHeight(50);
+        setMinimumWidth(totalWidth);
+    }
+
+protected:
+    void paintEvent(QPaintEvent* event) override {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        
+        int tickHeight = 10;
+        int timeStep = 1;
+        int timelineY = 10;
+        
+        // Рисуем все метки времени (QScrollArea автоматически обрезает невидимые части)
+        for (int t = 0; t <= (int)maxTime; t += timeStep) {
+            int x = margin + (int)(t * scale);
+            
+            // Вертикальная линия
+            painter.drawLine(x, timelineY, x, timelineY + tickHeight);
+            
+            // Метка времени
+            QString timeText = QString::number(t);
+            QRect textRect = painter.fontMetrics().boundingRect(timeText);
+            painter.drawText(x - textRect.width()/2, timelineY + tickHeight + 2 + textRect.height(), timeText);
+        }
+    }
+
+private:
+    double maxTime;
+    double scale;
+    int margin;
+    int totalWidth;
+};
 
 void showGanttChart(const std::vector<std::pair<int, double>>& starts,
                     const std::vector<Task>& tasks)
@@ -29,23 +74,36 @@ void showGanttChart(const std::vector<std::pair<int, double>>& starts,
 
     double scale = 20.0; // пикселей на единицу времени
 
-    int height = margin * 2 + (taskHeight + spacing) * tasks.size();
+    // Создаем map для быстрого поиска задачи по id
+    std::map<int, const Task*> task_map;
+    for (const auto& task : tasks) {
+        task_map[task.id] = &task;
+    }
+
+    int height = margin * 2 + (taskHeight + spacing) * starts.size();
     double maxTime = 0;
-    for (size_t i = 0; i < tasks.size(); ++i)
-        maxTime = std::max(maxTime, starts[i].second + tasks[i].duration);
+    for (const auto& [id, start_time] : starts) {
+        const Task* task = task_map[id];
+        if (task) {
+            maxTime = std::max(maxTime, start_time + task->duration);
+        }
+    }
     int width = margin * 2 + (int)(scale * maxTime);
 
-    // Добавляем место снизу для таймлайна
-    int timelineHeight = 50;
-    height += timelineHeight;
-
+    // Сцена только для задач (без таймлайна)
     QGraphicsScene* scene = new QGraphicsScene(0, 0, width, height);
 
     // Рисуем задачи
-    for (size_t i = 0; i < tasks.size(); ++i) {
+    for (size_t i = 0; i < starts.size(); ++i) {
+        int task_id = starts[i].first;
+        double start_time = starts[i].second;
+        const Task* task = task_map[task_id];
+        
+        if (!task) continue; // пропускаем, если задача не найдена
+        
         int y = margin + i * (taskHeight + spacing);
-        int x = margin + (int)(starts[i].second * scale);
-        int w = (int)(tasks[i].duration * scale);
+        int x = margin + (int)(start_time * scale);
+        int w = (int)(task->duration * scale);
 
         // QGraphicsRectItem* rect = scene->addRect(x, y, w, taskHeight, QPen(Qt::black), QBrush(Qt::blue));
         QGraphicsRectItem* rect = scene->addRect(
@@ -56,43 +114,61 @@ void showGanttChart(const std::vector<std::pair<int, double>>& starts,
 
 
         rect->setToolTip(QString("Task %1: start=%2, duration=%3")
-                         .arg(tasks[i].id)
-                         .arg(starts[i].second)
-                         .arg(tasks[i].duration));
+                         .arg(task_id)
+                         .arg(start_time)
+                         .arg(task->duration));
 
         // Номер задачи по центру
-        QGraphicsTextItem* text = scene->addText(QString::number(tasks[i].id));
+        QGraphicsTextItem* text = scene->addText(QString::number(task_id));
         text->setDefaultTextColor(Qt::white);
         QRectF rectBounds = rect->rect();
         text->setPos(x + rectBounds.width()/2 - text->boundingRect().width()/2,
                      y + rectBounds.height()/2 - text->boundingRect().height()/2);
     }
 
-    // Рисуем таймлайн
-    int timelineY = margin + (taskHeight + spacing) * tasks.size() + 10; // чуть ниже задач
-    int tickHeight = 10;
-    int timeStep = 1; // шаг времени на таймлайне, можно увеличить
+    // Создаем главный виджет с компоновкой
+    QWidget* mainWidget = new QWidget();
+    mainWidget->setWindowTitle("Gantt Chart");
+    QVBoxLayout* mainLayout = new QVBoxLayout(mainWidget);
+    mainLayout->setContentsMargins(0, 0, 0, 0);
+    mainLayout->setSpacing(0);
 
-    for (int t = 0; t <= (int)maxTime; t += timeStep) {
-        int x = margin + (int)(t * scale);
-        // Вертикальная линия
-        scene->addLine(x, timelineY, x, timelineY + tickHeight, QPen(Qt::black));
-        // Метка времени
-        QGraphicsTextItem* timeLabel = scene->addText(QString::number(t));
-        timeLabel->setPos(x - timeLabel->boundingRect().width()/2, timelineY + tickHeight + 2);
-    }
-
+    // Создаем view для задач
     QGraphicsView* view = new QGraphicsView(scene);
-    view->setWindowTitle("Gantt Chart");
+    view->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    view->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+
+    // Создаем контейнер для таймлайна с горизонтальным скроллбаром
+    QScrollArea* timelineScrollArea = new QScrollArea();
+    timelineScrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff); // скрываем скроллбар таймлайна
+    timelineScrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    timelineScrollArea->setFixedHeight(50);
+    timelineScrollArea->setWidgetResizable(false);
+    timelineScrollArea->setFrameShape(QFrame::NoFrame);
+
+    // Создаем виджет таймлайна
+    TimelineWidget* timelineWidget = new TimelineWidget(maxTime, scale, margin, width);
+    timelineScrollArea->setWidget(timelineWidget);
+
+    // Синхронизируем горизонтальную прокрутку view с таймлайном
+    // Когда прокручивается view, прокручивается и таймлайн
+    QObject::connect(view->horizontalScrollBar(), &QScrollBar::valueChanged,
+                     [timelineScrollArea](int value) {
+                         timelineScrollArea->horizontalScrollBar()->setValue(value);
+                     });
+
+    // Добавляем виджеты в компоновку
+    mainLayout->addWidget(view, 1); // view занимает все доступное пространство
+    mainLayout->addWidget(timelineScrollArea, 0); // таймлайн фиксированной высоты
 
     // исходный размер
     int originalWidth = width + 50;
     int originalHeight = height + 50;
 
     // делаем окно в два раза меньше
-    view->resize(originalWidth / 2, originalHeight / 2);
+    mainWidget->resize(originalWidth / 2, originalHeight / 2 + 50); // +50 для таймлайна
 
-    view->show();
+    mainWidget->show();
 
 }
 
@@ -232,7 +308,7 @@ int main() {
     std::map<int, std::vector<std::pair<int,int>>> resource_unavailability;
 
     // Пример: здесь ЗАДАЁТЕ свои интервалы для каждого ресурса
-    resource_unavailability[0] = { {1, 30}, {36, 40} };  // ресурс 0 недоступен в [10,20) и [50,60)
+    resource_unavailability[0] = { {1, 2} };  // ресурс 0 недоступен в [10,20) и [50,60)
     resource_unavailability[1] = { {1, 30} };            // ресурс 1 недоступен в [30,40)
     resource_unavailability[2] = { {1, 30} };
     resource_unavailability[3] = { {1, 30} };
@@ -401,6 +477,9 @@ int main() {
         for (auto& [id, time] : starts)
             std::cout << "t" << id << " = " << time << "\n";
 
+        // Сохраняем копию для визуализации (по порядку id) до сортировки
+        std::vector<std::pair<int, double>> starts_for_gantt = starts;
+
         // Best order: сортировка по времени начала
         std::sort(starts.begin(), starts.end(),
                   [](const auto& a, const auto& b) { return a.second < b.second; });
@@ -416,7 +495,7 @@ int main() {
         char *argv[] = {nullptr};
         QApplication app(argc, argv);
 
-        showGanttChart(starts, inst.tasks);
+        showGanttChart(starts_for_gantt, inst.tasks);
 
         return app.exec(); // откроет окно и держит его
     }
