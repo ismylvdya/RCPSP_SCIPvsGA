@@ -23,6 +23,9 @@
 #include <QPainter>
 #include <QScrollArea>
 #include <QFrame>
+#include <QGraphicsPathItem>
+#include <QPainterPath>
+
 
 namespace fs = std::filesystem;
 
@@ -65,11 +68,14 @@ private:
     int totalWidth;
 };
 
+
+
+
 void showGanttChart(const std::vector<std::pair<int, double>>& starts,
                     const std::vector<Task>& tasks)
 {
-    int taskHeight = 30;
-    int spacing = 10;
+    int taskHeight = 25;
+    int spacing = 5;
     int margin = 20;
 
     double scale = 20.0; // пикселей на единицу времени
@@ -98,7 +104,7 @@ void showGanttChart(const std::vector<std::pair<int, double>>& starts,
         int task_id = starts[i].first;
         double start_time = starts[i].second;
         const Task* task = task_map[task_id];
-        
+
         if (!task) continue; // пропускаем, если задача не найдена
         
         int y = margin + i * (taskHeight + spacing);
@@ -106,11 +112,41 @@ void showGanttChart(const std::vector<std::pair<int, double>>& starts,
         int w = (int)(task->duration * scale);
 
         // QGraphicsRectItem* rect = scene->addRect(x, y, w, taskHeight, QPen(Qt::black), QBrush(Qt::blue));
-        QGraphicsRectItem* rect = scene->addRect(
-            x, y, w, taskHeight,
+        int radius = taskHeight / 4; // степень скругления (можно меньше)
+
+
+        // Настройка пера для пунктирных линий
+
+        int timelineHeight = 50; // высота виджета таймлайна
+        int timelineY = height - timelineHeight; // координата таймлайна в сцене
+
+
+
+        QPen dashedPen(Qt::gray);
+        dashedPen.setWidthF(1.0); // тонкая линия
+        dashedPen.setColor(QColor(70, 70, 70)); // полупрозрачная
+
+        // шаблон: 5 пикселей линия, 5 пикселей пробел
+        QVector<qreal> dashes;
+        dashes << 5 << 5;
+        dashedPen.setDashPattern(dashes);
+
+        // линии от начала и конца задачи до таймлайна
+        scene->addLine(x, y + taskHeight, x, timelineY, dashedPen);
+        scene->addLine(x + w, y + taskHeight, x + w, timelineY, dashedPen);
+
+
+
+
+        QPainterPath path;
+        path.addRoundedRect(x, y, w, taskHeight, radius, radius);
+
+        QGraphicsPathItem* rect = scene->addPath(
+            path,
             QPen(Qt::black),
-            QBrush(QColor("#61C554"))  // hex-код цвета
+            QBrush(QColor("#61C554"))
         );
+
 
 
         rect->setToolTip(QString("Task %1: start=%2, duration=%3")
@@ -121,7 +157,7 @@ void showGanttChart(const std::vector<std::pair<int, double>>& starts,
         // Номер задачи по центру
         QGraphicsTextItem* text = scene->addText(QString::number(task_id));
         text->setDefaultTextColor(Qt::white);
-        QRectF rectBounds = rect->rect();
+        QRectF rectBounds = rect->boundingRect();
         text->setPos(x + rectBounds.width()/2 - text->boundingRect().width()/2,
                      y + rectBounds.height()/2 - text->boundingRect().height()/2);
     }
