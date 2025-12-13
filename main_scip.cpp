@@ -234,7 +234,8 @@ int main() {
     for (const auto& t : inst.tasks) {
         std::string name = "t" + std::to_string(t.id); // строчное имя переменной
         SCIP_VAR* var = nullptr;
-        SCIP_CALL(SCIPcreateVarBasic(scip, &var, name.c_str(), 0.0, SCIPinfinity(scip), 0.0, SCIP_VARTYPE_INTEGER)); // непосредственно инициализация переменной
+        const SCIP_Real EPS = 1e-4;
+        SCIP_CALL(SCIPcreateVarBasic(scip, &var, name.c_str(), 0.0, SCIPinfinity(scip), EPS, SCIP_VARTYPE_INTEGER)); // непосредственно инициализация переменной
         SCIP_CALL(SCIPaddVar(scip, var)); // добавляем эту переменную в модель
         start_vars[t.id - 1] = var; // чтобы обращаться к этой переменной по id задачи
     }
@@ -308,10 +309,10 @@ int main() {
     std::map<int, std::vector<std::pair<int,int>>> resource_unavailability;
 
     // Пример: здесь ЗАДАЁТЕ свои интервалы для каждого ресурса
-    resource_unavailability[0] = { {1, 2} };  // ресурс 0 недоступен в [10,20) и [50,60)
-    resource_unavailability[1] = { {1, 30} };            // ресурс 1 недоступен в [30,40)
-    resource_unavailability[2] = { {1, 30} };
-    resource_unavailability[3] = { {1, 30} };
+    resource_unavailability[0] = { {30, 40} };  // ресурс 0 недоступен в [10,20) и [50,60)
+    resource_unavailability[1] = { {30, 40} };            // ресурс 1 недоступен в [30,40)
+    resource_unavailability[2] = { {30, 40} };
+    resource_unavailability[3] = { {30, 40} };
 
 
     // ========  ОГРАНИЧЕНИЯ НА РЕСУРСЫ ОТ ВРЕМЕНИ  ========
@@ -357,6 +358,9 @@ int main() {
                     
                     // Если y_ij = 1, то task_i заканчивается до начала task_j:
                     // start_j >= start_i + duration_i
+                    // start_j - start_i >= duration_i - M*(1 - y_ij)
+                    // start_j - start_i >= duration_i - M + M*y_ij
+                    // start_j - start_i - M*y_ij >= duration_i - M
                     SCIP_CONS* cons1 = nullptr;
                     SCIP_VAR* vars1[] = { start_vars[task_j.id - 1], start_vars[task_i.id - 1], y_var };
                     SCIP_Real coefs1[] = { 1.0, -1.0, -M };
@@ -368,6 +372,7 @@ int main() {
                     
                     // Если y_ij = 0, то task_j заканчивается до начала task_i:
                     // start_i >= start_j + duration_j
+                    // start_i - start_j >= duration_j - M*y_ij
                     SCIP_CONS* cons2 = nullptr;
                     SCIP_VAR* vars2[] = { start_vars[task_i.id - 1], start_vars[task_j.id - 1], y_var };
                     SCIP_Real coefs2[] = { 1.0, -1.0, M };
@@ -411,7 +416,10 @@ int main() {
                     M += 1000;
 
                     // Если z = 1, то задача заканчивается до L: start + duration <= L
-                    // start <= L - duration + M*(1-z)  =>  start + M*z <= L - duration + M
+                    // start + duration <= L + M*(1-z)
+                    // start <= L - duration + M*(1-z)
+                    // start <= L - duration + M - M*z
+                    // start + M*z <= L - duration + M
                     SCIP_CONS* cons_before = nullptr;
                     SCIP_VAR* vars_before[] = { start_vars[task.id - 1], z_var };
                     SCIP_Real coefs_before[] = { 1.0, M };
@@ -423,7 +431,7 @@ int main() {
                     SCIP_CALL(SCIPreleaseCons(scip, &cons_before));
 
                     // Если z = 0, то задача начинается после U: start >= U
-                    // start >= U - M*z  =>  start + M*z >= U
+                    // start >= U - M*z
                     SCIP_CONS* cons_after = nullptr;
                     SCIP_VAR* vars_after[] = { start_vars[task.id - 1], z_var };
                     SCIP_Real coefs_after[] = { 1.0, M };
