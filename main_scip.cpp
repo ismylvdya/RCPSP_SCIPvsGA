@@ -275,6 +275,7 @@ int main()
     }
 
     /* ---------- Ограничения makespan ---------- */
+    // ( привязываем makespan к концу последней задачи: для каждой задачи t должен быть больше чем конец данной t )
     for (const auto& t : inst.tasks) {
         SCIP_CONS* cons = nullptr;
         SCIP_VAR* vars[]  = { makespan, start_vars[t.id - 1] };
@@ -297,19 +298,19 @@ int main()
 
     /* -----------------------------------------------------------------------
         1. Ограничения ёмкости ресурсов (resource capacity constraints)
-        Для каждой пары задач, конфликтующих по ресурсу, вводится дизъюнкция:
+        Сравниваем каждую задачу с каждой. Если конфликтуют по ресурсу, то вводится дизъюнкция:
         либо первая задача выполняется раньше второй, либо наоборот
-        Реализовано через бинарную переменную и big-M ограничения
+        ( через бинарную переменную и big-M ограничения )
         ----------------------------------------------------------------------- */
-    for (int r = 0; r < inst.n_resources; ++r) {
+    for (int r = 0; r < inst.n_resources; ++r) {                // по ресурсам
         int capacity = inst.resources[r].capacity;
 
-        for (size_t i = 0; i < inst.tasks.size(); ++i) {
+        for (size_t i = 0; i < inst.tasks.size(); ++i) {        // по таскам №1
             const auto& task_i = inst.tasks[i];
             int usage_i = (r < (int)task_i.resources.size()) ? task_i.resources[r] : 0;
             if (usage_i == 0) continue;
 
-            for (size_t j = i + 1; j < inst.tasks.size(); ++j) {
+            for (size_t j = i + 1; j < inst.tasks.size(); ++j) {        // по таскам №2
                 const auto& task_j = inst.tasks[j];
                 int usage_j = (r < (int)task_j.resources.size()) ? task_j.resources[r] : 0;
                 if (usage_j == 0) continue;
@@ -318,7 +319,7 @@ int main()
                    задачи не могут выполняться одновременно */
                 if (usage_i + usage_j > capacity) {
 
-                    // Бинарная переменная порядка выполнения задач
+                    // Бинарная переменная y_i_j_r порядка выполнения задач  --  тоже оптимизируемая переменная в SCIP
                     std::string y_name = "y_" + std::to_string(task_i.id) + "_" +
                                          std::to_string(task_j.id) + "_r" +
                                          std::to_string(r);
@@ -342,6 +343,7 @@ int main()
                         y_var
                     };
                     SCIP_Real coefs1[] = {1.0, -1.0, -M};
+
 
                     SCIP_CALL(SCIPcreateConsBasicLinear(
                         scip, &cons1,
@@ -399,7 +401,7 @@ int main()
             int usage = (r < (int)task.resources.size()) ? task.resources[r] : 0;
             if (usage == 0) continue;
 
-            if (resource_unavailability.find(r) != resource_unavailability.end()) {
+            if (resource_unavailability.find(r) != resource_unavailability.end()) { // если для ресурса r заданы ограничения в resource_unavailability
                 for (const auto& [L, U] : resource_unavailability[r]) {
 
                     // Бинарная переменная выбора стороны интервала
@@ -467,6 +469,7 @@ int main()
         3. Time-dependent capacity ресурсов
         capacity[r][t] — ёмкость ресурса r в момент времени t
         ------------------------------------------------------------ */
+    // число переменных  =  кол-во тасков  x  кол-во моментов времени
 
     std::map<int, std::map<int, int>> time_capacity;
 
@@ -491,7 +494,7 @@ int main()
     time_capacity[3][11] = 2;
     time_capacity[3][12] = 1;
 
-    // Переменные x_{i,t}: задача i активна в момент t
+    // Переменные x_{i,t} = 1  <=>  задача i активна в момент t
 
     std::map<std::pair<int,int>, SCIP_VAR*> x_vars;
 
@@ -501,16 +504,17 @@ int main()
         M += t.duration;
     M += 1000;
 
+    // определение индикаторов x_task_t
     for (const auto& task : inst.tasks) {
         if (task.duration == 0) continue;
 
-        for (const auto& [r, cap_map] : time_capacity) {
-            for (const auto& [t, cap] : cap_map) {
+        for (const auto& [r, cap_map] : time_capacity) {        // по всем ресурсам r
+            for (const auto& [t, cap] : cap_map) {      // по всем временам t
 
                 std::string name = "x_" + std::to_string(task.id) +
                                    "_t" + std::to_string(t);
 
-                SCIP_VAR* x = nullptr;
+                SCIP_VAR* x = nullptr;            // x = 1   =>   задача task выполняется в t   ;   x = 0   =>   не выполняется   (оптимизируется SCIP-ом)
                 SCIP_CALL(SCIPcreateVarBasic(
                     scip, &x, name.c_str(),
                     0.0, 1.0, 0.0, SCIP_VARTYPE_BINARY));
@@ -518,7 +522,7 @@ int main()
 
                 x_vars[{task.id, t}] = x;
 
-                /* start_i <= t + M*(1-x) */
+                /* start_i <= t + M*(1-x) */        // задача началась до текущего t
                 SCIP_CONS* c1 = nullptr;
                 SCIP_VAR* v1[] = { start_vars[task.id - 1], x };
                 SCIP_Real a1[] = { 1.0,  M };
@@ -531,7 +535,7 @@ int main()
                 SCIP_CALL(SCIPaddCons(scip, c1));
                 SCIP_CALL(SCIPreleaseCons(scip, &c1));
 
-                /* start_i + dur_i >= t+1 - M*(1-x) */
+                /* start_i + dur_i >= t+1 - M*(1-x) */    // задача закончится после текущего t
                 SCIP_CONS* c2 = nullptr;
                 SCIP_VAR* v2[] = { start_vars[task.id - 1], x };
                 SCIP_Real a2[] = { 1.0, -M };
@@ -547,7 +551,7 @@ int main()
         }
     }
 
-    // Ограничения ёмкости ресурсов во времени
+    // передача ограничений на ресурсы во времени в SCIP
 
     for (const auto& [r, cap_map] : time_capacity) {
         for (const auto& [t, cap] : cap_map) {
@@ -557,16 +561,17 @@ int main()
             std::vector<SCIP_Real> coefs;
 
             for (const auto& task : inst.tasks) {
-                int usage = (r < (int)task.resources.size())
+                int usage = (r < (int)task.resources.size())  // теоретически задача может использовать ресурс r
                             ? task.resources[r]
                             : 0;
                 if (usage == 0 || task.duration == 0) continue;
 
-                auto it = x_vars.find({task.id, t});
+                auto it = x_vars.find({task.id, t});     // переменная x_i_t
                 if (it == x_vars.end()) continue;
 
                 vars.push_back(it->second);
                 coefs.push_back((SCIP_Real)usage);
+                // sum ( usage_i_r x x_i_t )   -- то есть сколько данного ресурса r используется в t
             }
 
             if (!vars.empty()) {
@@ -579,7 +584,7 @@ int main()
                     coefs.data(),
                     -SCIPinfinity(scip),
                     cap));
-
+                    // то есть  -inf  <  sum ( usage_i_r x x_i_t )  <  капасити r
                 SCIP_CALL(SCIPaddCons(scip, cons));
                 SCIP_CALL(SCIPreleaseCons(scip, &cons));
             }
